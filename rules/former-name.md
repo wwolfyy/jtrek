@@ -1,0 +1,1 @@
+**jtrek was called jtrack until 2026-10-29.** An older record may use `jtrack` for this tool, and a command it writes as `jtrack checkin` is run today as `jtrek checkin`. The flag `--from-jtrack` of `jtrek migrate` keeps the old name. The npm package called `jtrack` is an unrelated tool, so do not install it.

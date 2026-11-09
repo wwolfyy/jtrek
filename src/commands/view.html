@@ -1,0 +1,1229 @@
+<!doctype html>
+<!--
+  src/commands/view.html is the page that `jtrek view` serves.
+
+  The page is self-contained on purpose, and it fetches no stylesheet, script or font from
+  anywhere. The tool has no dependencies at all. A page that loaded something from a CDN would give
+  it one, and that dependency would also require a network connection. Everything here runs against
+  the JSON routes in view.js.
+
+  The page has two tabs. "Records" reads one record at a time. "Dashboard" shows the store as a
+  whole, and the address #dashboard opens it directly (R-000142). The dashboard's figures are
+  computed on the server, in src/dashboard.js, and this page only draws them.
+
+  The dashboard draws plan progress, the requirements by feature and the counts by type and status
+  as charts, in inline HTML and CSS rather than with a charting library, for the reason above
+  (R-000390). Each of those charts has a button that shows the same figures as a table instead,
+  because a table gives exact numbers and does not depend on telling colours apart.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>jtrek registry</title>
+    <style>
+      :root {
+        --bg: #fbfbf9;
+        --panel: #ffffff;
+        --ink: #1b1b1a;
+        --muted: #6b6b66;
+        --line: #e2e1dc;
+        --accent: #2f6f4f;
+        --accent-soft: #e8f1eb;
+        --warn: #9a4a1e;
+        --chip: #f1f0ec;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        color-scheme: light;
+
+        /*
+          The dashboard's chart colours are taken from the dataviz skill's reference palette and
+          were checked with its validator against this page's own background, in each colour
+          scheme. The dark scheme has its own steps rather than an inverted copy of these.
+
+          The work colours are the palette's first three categorical slots. Those three stay
+          distinguishable from each other in any arrangement, including for readers with
+          red-green colour blindness, so a section with no parked work can put done beside open
+          safely. Abandoned work is neutral gray, because it is closed and needs no hue of its
+          own. Aqua sits below 3:1 contrast on the light background, so every bar also carries its
+          total as text, and each chart can be switched to its table.
+
+          A requirement's three states are ordered, so they are three shades of one blue. On the
+          light background the shade darkens from proposed to in force. On the dark background
+          it lightens instead, so that the finished end is the prominent one in both schemes.
+        */
+        --viz-done: #2a78d6;
+        --viz-open: #eb6834;
+        --viz-parked: #1baf7a;
+        --viz-abandoned: #898781;
+        --viz-proposed: #86b6ef;
+        --viz-agreed: #3987e5;
+        --viz-inforce: #184f95;
+
+        /*
+          The heat map's shades, from the fewest records to the most. Each step has the text
+          colour that contrasts with it more, dark ink on the pale steps and white on the deep
+          ones.
+        */
+        --h0: #cde2fb; --h1: #b7d3f6; --h2: #9ec5f4; --h3: #86b6ef; --h4: #6da7ec;
+        --h5: #5598e7; --h6: #3987e5; --h7: #2a78d6; --h8: #256abf; --h9: #1c5cab;
+        --h10: #184f95; --h11: #104281; --h12: #0d366b;
+        --hk0: var(--ink); --hk1: var(--ink); --hk2: var(--ink); --hk3: var(--ink);
+        --hk4: var(--ink); --hk5: var(--ink); --hk6: var(--ink); --hk7: #fff; --hk8: #fff;
+        --hk9: #fff; --hk10: #fff; --hk11: #fff; --hk12: #fff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #17181a;
+          --panel: #1e2023;
+          --ink: #e7e7e4;
+          --muted: #9a9a95;
+          --line: #32353a;
+          --accent: #7dc79b;
+          --accent-soft: #23302a;
+          --warn: #e0a06a;
+          --chip: #2a2d31;
+          color-scheme: dark;
+
+          --viz-done: #3987e5;
+          --viz-open: #d95926;
+          --viz-parked: #199e70;
+          --viz-abandoned: #898781;
+          --viz-proposed: #184f95;
+          --viz-agreed: #2a78d6;
+          --viz-inforce: #86b6ef;
+
+          /* On the dark background a small count recedes towards the background, so the ramp runs the other way. */
+          --h0: #0d366b; --h1: #104281; --h2: #184f95; --h3: #1c5cab; --h4: #256abf;
+          --h5: #2a78d6; --h6: #3987e5; --h7: #5598e7; --h8: #6da7ec; --h9: #86b6ef;
+          --h10: #9ec5f4; --h11: #b7d3f6; --h12: #cde2fb;
+          --hk0: #fff; --hk1: #fff; --hk2: #fff; --hk3: #fff; --hk4: #fff; --hk5: #fff;
+          --hk6: var(--bg); --hk7: var(--bg); --hk8: var(--bg); --hk9: var(--bg);
+          --hk10: var(--bg); --hk11: var(--bg); --hk12: var(--bg);
+        }
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        padding: 10px 16px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      header h1 {
+        font-size: 14px;
+        margin: 0 8px 0 0;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      #search {
+        flex: 1 1 260px;
+        min-width: 180px;
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--ink);
+        font-size: 14px;
+      }
+      #search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      #filters {
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        padding: 6px 16px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+      .group-label {
+        width: 64px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      button.toggle, #clear-filters {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--ink);
+        font-size: 12px;
+        padding: 2px 9px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      button.toggle[aria-pressed="true"] {
+        background: var(--accent-soft);
+        color: var(--accent);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      #clear-filters { color: var(--muted); align-self: flex-start; margin-left: 68px; }
+      #status-line { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+      main { flex: 1; display: flex; min-height: 0; }
+
+      #list {
+        width: 340px;
+        flex: 0 0 340px;
+        border-right: 1px solid var(--line);
+        overflow-y: auto;
+        background: var(--panel);
+      }
+      .row {
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--line);
+        cursor: pointer;
+      }
+      .row:hover { background: var(--accent-soft); }
+      .row[aria-selected="true"] {
+        background: var(--accent-soft);
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+      .row-id { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; }
+      .row-title { font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+      .row-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+      #detail { flex: 1; overflow-y: auto; padding: 22px 26px 60px; min-width: 0; }
+      #detail > * { max-width: 78ch; }
+
+      h2 { font-size: 20px; margin: 0 0 4px; overflow-wrap: anywhere; }
+      .record-id { font-family: var(--mono); color: var(--accent); font-size: 14px; }
+
+      .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; }
+      .chip {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: var(--chip);
+        color: var(--muted);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .chip.open { background: var(--accent-soft); color: var(--accent); }
+      .chip.alert { background: var(--accent-soft); color: var(--warn); }
+
+      .links { margin-top: 12px; font-size: 13px; color: var(--muted); }
+      .links div { margin-top: 3px; overflow-wrap: anywhere; }
+      a.ref {
+        font-family: var(--mono);
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: none;
+        border-bottom: 1px dotted var(--accent);
+      }
+
+      .section-label {
+        margin: 26px 0 10px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-weight: 700;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+
+      .rev {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+      }
+      .rev-head {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .rev-n { font-family: var(--mono); font-weight: 700; font-size: 13px; }
+      .rev-date { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+      .note p { margin: 0 0 9px; overflow-wrap: anywhere; }
+      .note p:last-child { margin-bottom: 0; }
+      .note code {
+        font-family: var(--mono);
+        font-size: 0.88em;
+        background: var(--chip);
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+      .no-note { color: var(--muted); font-style: italic; }
+
+      pre.prose {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.6;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin: 0;
+      }
+
+      .stats { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 8px; }
+      .stats section { min-width: 150px; }
+      .stats h3 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin: 0 0 6px;
+      }
+      .stats li { list-style: none; font-size: 13px; display: flex; justify-content: space-between; gap: 18px; }
+      .stats ul { margin: 0; padding: 0; }
+      .stats .n { font-family: var(--mono); color: var(--muted); }
+      .hint { color: var(--muted); font-size: 13px; }
+
+      #tabs { display: flex; gap: 2px; }
+      #tabs button {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--muted);
+        font-size: 13px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      #tabs button[aria-selected="true"] {
+        background: var(--accent-soft);
+        color: var(--accent);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      /*
+       * The filter bar needs its own entry here. The rule '#filters' above gives it display: flex,
+       * and a rule naming an id outranks '.records-only[hidden]', so without '#filters[hidden]' the
+       * bar stayed visible on the Dashboard tab (R-000391).
+       */
+      .records-only[hidden], #filters[hidden], main[hidden], #dash[hidden] { display: none; }
+
+      #dash { flex: 1; overflow-y: auto; padding: 22px 26px 60px; }
+      #dash > * { max-width: 110ch; }
+      table.grid { border-collapse: collapse; font-size: 13px; margin: 4px 0 8px; }
+      table.grid th, table.grid td {
+        border-bottom: 1px solid var(--line);
+        padding: 4px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      table.grid th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+      table.grid td.n, table.grid th.n { text-align: right; font-family: var(--mono); }
+      table.grid td.zero { color: var(--line); }
+      .item { margin: 3px 0; font-size: 14px; }
+      .item .meta { color: var(--muted); font-size: 12px; }
+      .parked-note { margin: 2px 0 10px 18px; color: var(--muted); font-size: 13px; }
+      .parked-note p { margin: 0 0 4px; }
+      .feature { margin: 14px 0 4px; font-weight: 600; font-family: var(--mono); font-size: 13px; }
+      .statement { margin: 3px 0 3px 18px; font-size: 14px; }
+
+      /* The dashboard's charts. */
+      .chart-label { display: flex; align-items: baseline; gap: 12px; }
+      .chart-label .view-switch {
+        margin-left: auto;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--muted);
+        font-size: 11px;
+        padding: 1px 9px;
+        border-radius: 10px;
+        cursor: pointer;
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 600;
+      }
+      .kpis { display: flex; flex-wrap: wrap; gap: 14px 34px; margin: 16px 0 6px; }
+      .kpi .v { font-size: 30px; font-weight: 600; line-height: 1.1; }
+      .kpi .l { font-size: 12px; color: var(--muted); }
+      .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+      .legend .key { display: inline-flex; align-items: center; gap: 6px; }
+      .legend .group-name { font-weight: 600; }
+      .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+      .bars {
+        display: grid;
+        column-gap: 14px;
+        row-gap: 1px;
+        align-items: center;
+        font-size: 13px;
+      }
+      .bars.plan { grid-template-columns: max-content max-content minmax(120px, 1fr) minmax(120px, 1fr); }
+      .bars.features { grid-template-columns: max-content minmax(160px, 1fr); max-width: 80ch; }
+      .bars .col-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding-bottom: 4px; }
+      .bars .name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+      .lane {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 3.2em 5px 4px;
+        border-radius: 4px;
+        min-width: 0;
+      }
+      .lane:hover, .lane:focus-visible { background: var(--accent-soft); outline: none; }
+      .bar { display: flex; gap: 2px; height: 12px; flex: none; }
+      .seg { flex-basis: 0; flex-shrink: 1; min-width: 0; height: 100%; }
+      .bar .seg:last-child { border-radius: 0 4px 4px 0; }
+      .lane .total { font-family: var(--mono); font-size: 12px; color: var(--muted); flex: none; }
+      .lane .none { font-size: 12px; color: var(--muted); }
+      .headline { font-size: 14px; margin: 0 0 10px; }
+      .headline strong { font-size: 22px; }
+      table.heat { border-collapse: separate; border-spacing: 2px; font-size: 13px; margin: 4px 0 8px; }
+      table.heat th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; padding: 2px 8px; text-align: left; }
+      table.heat thead th { text-align: center; }
+      table.heat td { min-width: 58px; height: 30px; padding: 0 9px; text-align: right; font-family: var(--mono); border-radius: 3px; }
+      table.heat td.cell:hover, table.heat td.cell:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+      table.heat td.empty { background: var(--chip); opacity: 0.5; }
+      table.heat td.sum { color: var(--muted); }
+      #tip {
+        position: fixed;
+        z-index: 10;
+        pointer-events: none;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+        max-width: 300px;
+      }
+      #tip[hidden] { display: none; }
+      #tip .t-title { color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
+      #tip .t-row { display: flex; align-items: center; gap: 8px; }
+      #tip .t-key { width: 12px; height: 3px; border-radius: 2px; flex: none; }
+      #tip .t-v { font-family: var(--mono); font-weight: 700; min-width: 2.2em; text-align: right; }
+      #tip .t-l { color: var(--muted); }
+
+      @media (max-width: 760px) {
+        main { flex-direction: column; }
+        #list { width: auto; flex: 0 0 38vh; border-right: none; border-bottom: 1px solid var(--line); }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>jtrek</h1>
+      <nav id="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="records" aria-selected="true">Records</button>
+        <button type="button" role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
+      </nav>
+      <input id="search" class="records-only" type="search" placeholder="Search id, title and every revision's note…  ( / )" autocomplete="off" />
+      <span id="status-line">loading…</span>
+    </header>
+
+    <div id="filters" class="records-only" aria-label="Filters">
+      <div class="group" data-field="type"><span class="group-label">type</span></div>
+      <div class="group" data-field="status"><span class="group-label">status</span></div>
+      <div class="group" data-field="plan"><span class="group-label">section</span></div>
+      <button id="clear-filters" type="button">clear every filter</button>
+    </div>
+
+    <main>
+      <div id="list" role="listbox" aria-label="Records"></div>
+      <div id="detail"></div>
+    </main>
+    <div id="dash" hidden></div>
+    <div id="tip" role="tooltip" hidden></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let STORE = { records: [] };
+      let matches = [];
+      let selectedId = null;
+
+      /**
+       * The values switched on in each filter group. Within a group the values combine with OR, so
+       * switching on 'open' and 'in-progress' shows records at either status. The groups combine
+       * with AND, so adding type 'task' narrows that to tasks. A group with nothing switched on
+       * does not filter at all.
+       */
+      const FILTER_FIELDS = ['type', 'status', 'plan'];
+      const chosen = Object.fromEntries(FILTER_FIELDS.map((field) => [field, new Set()]));
+
+      const escapeHtml = (text) =>
+        String(text ?? '').replace(/[&<>"']/g, (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+        );
+
+      /**
+       * A note is one long string in the registry, so it arrives as a single paragraph. Notes in
+       * the store use the markers ⚠️ 🔑 📌 🔴 to open a new statement inside a note. Breaking the
+       * text before each marker therefore recovers the paragraphs the author meant, without
+       * inventing any.
+       */
+      function renderNote(note) {
+        if (!note) return '<p class="no-note">This revision carries no note.</p>';
+        return escapeHtml(note)
+          .split(/\n{2,}/)
+          .flatMap((block) => block.split(/(?=(?:⚠️|🔑|📌|🔴)\s)/u))
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .map(
+            (part) =>
+              '<p>' +
+              part
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>') +
+              '</p>'
+          )
+          .join('');
+      }
+
+      const refLink = (id) => `<a class="ref" data-goto="${escapeHtml(id)}">${escapeHtml(id)}</a>`;
+
+      function haystack(record) {
+        return [
+          record.id,
+          record.title,
+          record.statement,
+          record.feature,
+          record.plan,
+          (record.files || []).join(' '),
+          record.revisions.map((r) => r.note || '').join(' '),
+        ]
+          .join(' ')
+          .toLowerCase();
+      }
+
+      /**
+       * Every search term must appear somewhere in the record, so each added term narrows it. The
+       * filter groups narrow it further, as `chosen` above describes.
+       */
+      function applyFilters() {
+        const terms = $('search').value.toLowerCase().split(/\s+/).filter(Boolean);
+
+        matches = STORE.records.filter((record) => {
+          for (const field of FILTER_FIELDS) {
+            if (chosen[field].size > 0 && !chosen[field].has(record[field])) return false;
+          }
+          if (terms.length === 0) return true;
+          const hay = record._hay;
+          return terms.every((term) => hay.includes(term));
+        });
+
+        $('status-line').textContent =
+          `${matches.length} of ${STORE.recordCount} record(s) · ${STORE.revisionCount} revision(s)`;
+        renderList();
+      }
+
+      function renderList() {
+        $('list').innerHTML = matches
+          .map(
+            (r) => `
+            <div class="row" data-id="${r.id}" role="option" aria-selected="${r.id === selectedId}">
+              <div class="row-id">${r.id}</div>
+              <div class="row-title">${escapeHtml(r.title)}</div>
+              <div class="row-meta">${r.type} · ${r.status}${r.outcome ? ' · ' + r.outcome : ''} · ${escapeHtml(r.plan || '—')} · rev ${r.rev}</div>
+            </div>`
+          )
+          .join('');
+      }
+
+      /**
+       * This is what the Records tab shows when no record is selected. The figures about the store
+       * as a whole that this pane used to show are on the Dashboard tab now.
+       */
+      function renderHint() {
+        selectedId = null;
+        renderList();
+        $('detail').innerHTML =
+          `<h2>Reading a record</h2>
+           <p class="hint">${escapeHtml(STORE.storeDir)}</p>
+           <p class="hint">Pick one on the left, or search. The search covers every revision’s note, so a phrase remembered from an argument finds the record that carries it. The Dashboard tab shows the store as a whole.</p>`;
+      }
+
+      async function renderRecord(id) {
+        const record = STORE.records.find((r) => r.id === id);
+        if (!record) return renderHint();
+        selectedId = id;
+        renderList();
+
+        const chip = (text, cls = '') => (text ? `<span class="chip ${cls}">${escapeHtml(text)}</span>` : '');
+        const links = [];
+        if (record.supersedes?.length)
+          links.push(`<div>Supersedes ${record.supersedes.map(refLink).join(', ')}</div>`);
+        if (record.split_from) links.push(`<div>Split from ${refLink(record.split_from)}</div>`);
+        // Only the links this record makes are shown. Finding the records that name this one would
+        // mean a query over every row, rather than reading a field on this one, and this pane
+        // shows one record at a time. Each kind is shown as written, so a row carrying an unknown
+        // kind is visible here rather than hidden.
+        for (const [kind, ids] of Object.entries(record.related ?? {})) {
+          if (ids?.length) links.push(`<div>${escapeHtml(kind)} ${ids.map(refLink).join(', ')}</div>`);
+        }
+        if (record.files?.length)
+          links.push(`<div>Files: <code>${record.files.map(escapeHtml).join('</code>, <code>')}</code></div>`);
+        if (record.source_ref) links.push(`<div>Source: ${escapeHtml(record.source_ref)}</div>`);
+
+        const newestFirst = [...record.revisions].reverse();
+
+        $('detail').innerHTML =
+          `<div class="record-id">${record.id}</div>
+           <h2>${escapeHtml(record.title)}</h2>
+           <div class="chips">
+             ${chip(record.type)}
+             ${chip(record.status, record.status === 'open' ? 'open' : record.status === 'in-progress' ? 'alert' : '')}
+             ${chip(record.outcome, record.outcome === 'superseded' ? 'alert' : '')}
+             ${chip(record.plan)}
+             ${chip(record.feature ? `feature: ${record.feature}` : null)}
+             ${chip(`${record.revisions.length} revision(s)`)}
+           </div>
+           ${record.statement
+             ? `<div class="section-label">Statement</div><div class="note"><p>${escapeHtml(record.statement)}</p></div>`
+             : ''}
+           <div class="links">${links.join('')}</div>
+           <div class="section-label">Revisions, newest first</div>
+           ${newestFirst
+             .map(
+               (rev) => `
+             <div class="rev">
+               <div class="rev-head">
+                 <span class="rev-n">rev ${rev.rev}</span>
+                 <span class="rev-date">${escapeHtml(rev.ts)}</span>
+                 <span class="chip">${escapeHtml(rev.status)}</span>
+                 ${rev.outcome ? `<span class="chip">${escapeHtml(rev.outcome)}</span>` : ''}
+               </div>
+               <div class="note">${renderNote(rev.note)}</div>
+             </div>`
+             )
+             .join('')}
+           <div id="prose-slot"></div>`;
+
+        $('detail').scrollTop = 0;
+
+        if (record.detail_ref) {
+          const response = await fetch(`/api/prose?id=${encodeURIComponent(record.id)}`);
+          const body = await response.json();
+          $('prose-slot').innerHTML =
+            `<div class="section-label">Prose file — ${escapeHtml(record.detail_ref)}</div>` +
+            (body.text
+              ? `<pre class="prose">${escapeHtml(body.text)}</pre>`
+              : `<p class="hint">The row names a prose file, but it could not be read.</p>`);
+        }
+      }
+
+      const itemLine = (r) =>
+        `<div class="item">${refLink(r.id)} — ${escapeHtml(r.title)} <span class="meta">${escapeHtml(r.type)} · ${escapeHtml(r.plan || '—')}</span></div>`;
+
+      const itemList = (heading, records, empty) =>
+        `<div class="section-label">${heading}</div>` +
+        (records.length === 0 ? `<p class="hint">${empty}</p>` : records.map(itemLine).join(''));
+
+      /** A table whose numeric cells are right-aligned, with zeros drawn faintly so the rest stand out. */
+      function grid(headings, rows) {
+        const cellHtml = (value) =>
+          typeof value === 'number'
+            ? `<td class="n${value === 0 ? ' zero' : ''}">${value}</td>`
+            : `<td>${value}</td>`;
+        return `<table class="grid"><thead><tr>${headings
+          .map((h, i) => `<th${i >= headings.numeric ? ' class="n"' : ''}>${escapeHtml(h)}</th>`)
+          .join('')}</tr></thead><tbody>${rows
+          .map((row) => `<tr>${row.map(cellHtml).join('')}</tr>`)
+          .join('')}</tbody></table>`;
+      }
+
+      /**
+       * The names of the charts the reader has switched to their table. Each chart has a button
+       * that adds or removes its name here, and the dashboard is then drawn again from the figures
+       * it already holds, without asking the server.
+       */
+      const asTable = new Set();
+      let lastDashboard = null;
+
+      /** A section heading for a chart, carrying the button that switches it between chart and table. */
+      const chartLabel = (heading, chart) =>
+        `<div class="section-label chart-label"><span>${heading}</span>` +
+        `<button type="button" class="view-switch" data-view-switch="${chart}">${
+          asTable.has(chart) ? 'show as chart' : 'show as table'
+        }</button></div>`;
+
+      /**
+       * The segments a work bar and a requirements bar are divided into, in the order they are
+       * drawn from the bar's start. The finished part comes first, so that the length before the
+       * first gap is how far a section or a feature has come.
+       */
+      const WORK_PARTS = [
+        { key: 'done', label: 'done', color: 'var(--viz-done)' },
+        { key: 'active', label: 'open', color: 'var(--viz-open)' },
+        { key: 'parked', label: 'parked', color: 'var(--viz-parked)' },
+        { key: 'abandoned', label: 'abandoned', color: 'var(--viz-abandoned)' },
+      ];
+      const REQUIREMENT_PARTS = [
+        { key: 'inForce', label: 'in force', color: 'var(--viz-inforce)' },
+        { key: 'agreed', label: 'agreed', color: 'var(--viz-agreed)' },
+        { key: 'proposed', label: 'proposed', color: 'var(--viz-proposed)' },
+      ];
+
+      const sum = (counts, parts) => parts.reduce((n, part) => n + counts[part.key], 0);
+
+      const legend = (name, parts) =>
+        `<span class="key group-name">${escapeHtml(name)}</span>` +
+        parts
+          .map((p) => `<span class="key"><span class="swatch" style="background:${p.color}"></span>${escapeHtml(p.label)}</span>`)
+          .join('');
+
+      /**
+       * The tooltip's contents travel on the mark as JSON in a data attribute. The tooltip is
+       * built from it with textContent when the pointer arrives, so no title or name from the
+       * store is ever parsed as markup.
+       */
+      const tipAttr = (title, rows) => `data-tip="${escapeHtml(JSON.stringify({ title, rows }))}"`;
+
+      /**
+       * One horizontal stacked bar, with its total written after its end.
+       *
+       * `scale` is the largest total among the bars it is compared with, so the lengths of those
+       * bars can be compared directly. The bar's length is its total as a share of that scale, and
+       * the segments divide that length by their counts. The whole lane, rather than only the
+       * painted bar, is the target for the pointer and for keyboard focus, and its tooltip lists
+       * every segment of the bar, the empty ones included.
+       */
+      function stackedBar(counts, parts, scale, title) {
+        const total = sum(counts, parts);
+        const tip = tipAttr(
+          title,
+          parts.map((p) => ({ v: counts[p.key], l: p.label, c: p.color }))
+        );
+        if (total === 0) return `<div class="lane" tabindex="0" ${tip}><span class="none">none</span></div>`;
+        const segments = parts
+          .filter((p) => counts[p.key] > 0)
+          .map((p) => `<span class="seg" style="flex-grow:${counts[p.key]};background:${p.color}"></span>`)
+          .join('');
+        const width = (total / scale) * 100;
+        return (
+          `<div class="lane" tabindex="0" ${tip}>` +
+          `<span class="bar" style="width:${width}%">${segments}</span>` +
+          `<span class="total">${total}</span></div>`
+        );
+      }
+
+      /** The six headline figures across the top of the dashboard. */
+      function headlinePart(d) {
+        const proposed = d.features.reduce((n, f) => n + f.proposed, 0);
+        const figures = [
+          [d.counts.total, 'records in the store'],
+          [d.work.open.length, 'open work'],
+          [d.work.inProgress.length, 'left unfinished (in-progress)'],
+          [d.questions.length, 'open questions'],
+          [proposed, 'requirements awaiting review'],
+          [d.deferred.length, 'deferred'],
+        ];
+        return (
+          '<div class="kpis">' +
+          figures.map(([v, l]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('') +
+          '</div>'
+        );
+      }
+
+      function planTable(sections) {
+        const headings = Object.assign(
+          ['section', 'state', 'open', 'parked', 'done', 'abandoned', 'proposed', 'agreed', 'in force'],
+          { numeric: 2 }
+        );
+        const rows = sections.map((s) => [
+          `<strong>${escapeHtml(s.slug)}</strong> <span class="meta">${escapeHtml(s.title)}</span>`,
+          escapeHtml(s.state),
+          s.work.active,
+          s.work.parked,
+          s.work.done,
+          s.work.abandoned,
+          s.requirements.proposed,
+          s.requirements.agreed,
+          s.requirements.inForce,
+        ]);
+        return grid(headings, rows);
+      }
+
+      /**
+       * Each section is one row with two bars, its work and its requirements. Both bars count
+       * records, so they share one scale, and a work bar and a requirements bar of equal length
+       * hold the same number of records.
+       */
+      function planChart(sections) {
+        const scale = Math.max(
+          1,
+          ...sections.map((s) => Math.max(sum(s.work, WORK_PARTS), sum(s.requirements, REQUIREMENT_PARTS)))
+        );
+        const rows = sections
+          .map((s) => {
+            const title = `${s.slug} — ${s.title}`;
+            return (
+              `<span class="name">${escapeHtml(s.slug)}</span>` +
+              `<span><span class="chip">${escapeHtml(s.state)}</span></span>` +
+              stackedBar(s.work, WORK_PARTS, scale, `${title}: work`) +
+              stackedBar(s.requirements, REQUIREMENT_PARTS, scale, `${title}: requirements`)
+            );
+          })
+          .join('');
+        return (
+          `<div class="legend">${legend('work', WORK_PARTS)}</div>` +
+          `<div class="legend">${legend('requirements', REQUIREMENT_PARTS)}</div>` +
+          '<div class="bars plan">' +
+          '<span class="col-head">section</span><span class="col-head">state</span>' +
+          '<span class="col-head">work</span><span class="col-head">requirements</span>' +
+          rows +
+          '</div>'
+        );
+      }
+
+      function planPart(d) {
+        const label = chartLabel('Plan progress, as jtrek plan progress reports it', 'plan');
+        if (d.plan === null) return `${label}<p class="hint">${escapeHtml(d.planMissing)}</p>`;
+        const unknown = d.plan.unknown.length
+          ? `<p class="hint">These plan values name no section, so the chart leaves their records out: ${d.plan.unknown
+              .map((u) => `${escapeHtml(u.plan)} (${u.ids.map(refLink).join(', ')})`)
+              .join('; ')}.</p>`
+          : '';
+        const body = d.plan.sections.length === 0
+          ? '<p class="hint">The plan document has no sections.</p>'
+          : asTable.has('plan')
+            ? planTable(d.plan.sections)
+            : planChart(d.plan.sections);
+        return (
+          label +
+          `<p class="hint">"open" counts open and in-progress work, and "parked" counts planned and deferred work. A requirement is "proposed" until the owner agrees to it, then "agreed" until a passing test puts it in force.</p>` +
+          body +
+          unknown +
+          `<p class="hint">${d.plan.unfiled} record(s) have no plan value, which is allowed.</p>`
+        );
+      }
+
+      function workPart(d) {
+        const deferred =
+          `<div class="section-label">Deferred, with what would restart each</div>` +
+          (d.deferred.length === 0
+            ? '<p class="hint">Nothing is deferred.</p>'
+            : d.deferred
+                .map((r) => `${itemLine(r)}<div class="parked-note note">${renderNote(r.note)}</div>`)
+                .join(''));
+        return (
+          itemList('Left unfinished by a session (in-progress)', d.work.inProgress, 'No work sits at in-progress.') +
+          itemList('Open work', d.work.open, 'No work is open.') +
+          itemList('Open questions, which are the owner’s to answer', d.questions, 'No question is open.') +
+          deferred
+        );
+      }
+
+      function requirementsPart(d) {
+        const label = chartLabel('Requirements, by feature', 'features');
+        if (d.features.length === 0) return `${label}<p class="hint">The store holds no requirement.</p>`;
+        let table;
+        if (asTable.has('features')) {
+          const headings = Object.assign(['feature', 'proposed', 'agreed', 'in force'], { numeric: 1 });
+          table = grid(
+            headings,
+            d.features.map((f) => [`<code>${escapeHtml(f.feature)}</code>`, f.proposed, f.agreed, f.inForce])
+          );
+        } else {
+          table = requirementsChart(d.features);
+        }
+        const statements = d.features
+          .filter((f) => f.statements.length)
+          .map(
+            (f) =>
+              `<div class="feature">${escapeHtml(f.feature)}</div>` +
+              f.statements
+                .map((r) => `<div class="statement">${refLink(r.id)} ${escapeHtml(r.statement)}</div>`)
+                .join('')
+          )
+          .join('');
+        return (
+          label +
+          table +
+          '<div class="section-label">Requirements in force</div>' +
+          (statements || '<p class="hint">No requirement is in force.</p>')
+        );
+      }
+
+      /**
+       * A headline saying how far the review of the requirements has come, and one bar per
+       * feature that runs from in force through agreed to proposed.
+       */
+      function requirementsChart(features) {
+        const totals = { inForce: 0, agreed: 0, proposed: 0 };
+        for (const f of features) for (const key of Object.keys(totals)) totals[key] += f[key];
+        const all = totals.inForce + totals.agreed + totals.proposed;
+        const scale = Math.max(1, ...features.map((f) => sum(f, REQUIREMENT_PARTS)));
+        const rows = features
+          .map((f) => `<span class="name">${escapeHtml(f.feature)}</span>` + stackedBar(f, REQUIREMENT_PARTS, scale, f.feature))
+          .join('');
+        return (
+          `<p class="headline"><strong>${totals.inForce}</strong> of ${all} requirement(s) are in force. ` +
+          `${totals.agreed} are agreed and wait for a passing test, and ${totals.proposed} are proposed and wait for the owner’s review.</p>` +
+          `<div class="legend">${legend('requirements', REQUIREMENT_PARTS)}</div>` +
+          '<div class="bars features"><span class="col-head">feature</span><span class="col-head">requirements</span>' +
+          rows +
+          '</div>'
+        );
+      }
+
+      /**
+       * The counts by type and status drawn as a grid of shaded cells, with the exact count in
+       * every cell that has one.
+       *
+       * The shade follows the logarithm of the count rather than the count itself. The store's
+       * counts run from 1 to well over 100, and on a straight scale every cell below about ten
+       * would be drawn in the palest shade, which would hide the open and in-progress cells that a
+       * reader most often looks for. An empty cell is left unshaded, so that no count is confused
+       * with nothing.
+       */
+      function countsHeat(d) {
+        const { types, statuses, byTypeAndStatus, total } = d.counts;
+        const max = Math.max(1, ...types.flatMap((t) => statuses.map((s) => byTypeAndStatus[t][s])));
+        const step = (n) => (max === 1 ? 12 : Math.round((Math.log(n) / Math.log(max)) * 12));
+        const cell = (type, status) => {
+          const n = byTypeAndStatus[type][status];
+          if (n === 0) return '<td class="empty"></td>';
+          const i = step(n);
+          const tip = tipAttr(`${type} · ${status}`, [{ v: n, l: `record(s) of ${total}` }]);
+          return `<td class="cell" tabindex="0" style="background:var(--h${i});color:var(--hk${i})" ${tip}>${n}</td>`;
+        };
+        const rowTotal = (type) => statuses.reduce((n, s) => n + byTypeAndStatus[type][s], 0);
+        const columnTotal = (status) => types.reduce((n, t) => n + byTypeAndStatus[t][status], 0);
+        return (
+          `<p class="hint">A cell’s shade grows with the logarithm of its count, so that a count of 3 stays visible beside a count of 150. The number in each cell is the exact count, and an empty cell holds no record.</p>` +
+          '<table class="heat"><thead><tr><th></th>' +
+          statuses.map((s) => `<th>${escapeHtml(s)}</th>`).join('') +
+          '<th>total</th></tr></thead><tbody>' +
+          types
+            .map(
+              (t) =>
+                `<tr><th>${escapeHtml(t)}</th>${statuses.map((s) => cell(t, s)).join('')}<td class="sum">${rowTotal(t)}</td></tr>`
+            )
+            .join('') +
+          `<tr><th>total</th>${statuses.map((s) => `<td class="sum">${columnTotal(s)}</td>`).join('')}<td class="sum"><strong>${total}</strong></td></tr>` +
+          '</tbody></table>'
+        );
+      }
+
+      function countsPart(d) {
+        const label = chartLabel('Records by type and status', 'counts');
+        if (!asTable.has('counts')) return label + countsHeat(d);
+        const { types, statuses, byTypeAndStatus, total } = d.counts;
+        const headings = Object.assign(['type', ...statuses, 'total'], { numeric: 1 });
+        const rows = types.map((type) => {
+          const cells = statuses.map((status) => byTypeAndStatus[type][status]);
+          return [escapeHtml(type), ...cells, cells.reduce((a, b) => a + b, 0)];
+        });
+        const columnTotals = statuses.map((status) =>
+          types.reduce((n, type) => n + byTypeAndStatus[type][status], 0)
+        );
+        rows.push(['<strong>total</strong>', ...columnTotals, total]);
+        return label + grid(headings, rows);
+      }
+
+      function splitsPart(d) {
+        const label = '<div class="section-label">Records split into others</div>';
+        if (d.splits.length === 0) return `${label}<p class="hint">No record has been split.</p>`;
+        return (
+          label +
+          d.splits
+            .map(
+              (s) =>
+                `<div class="item">${refLink(s.parent.id)} — ${escapeHtml(s.parent.title ?? 'not in the store')} <span class="meta">${s.done} of ${s.children.length} done</span></div>` +
+                s.children
+                  .map((c) => `<div class="statement">${refLink(c.id)} — ${escapeHtml(c.title)} <span class="meta">${escapeHtml(c.status)}</span></div>`)
+                  .join('')
+            )
+            .join('')
+        );
+      }
+
+      /**
+       * The dashboard is fetched each time its tab opens, so it shows the store as it is now, even
+       * when the record list was loaded some time before.
+       */
+      async function renderDashboard() {
+        $('dash').innerHTML = '<p class="hint">loading…</p>';
+        let d;
+        try {
+          const response = await fetch('/api/dashboard');
+          d = await response.json();
+          if (!response.ok || !d?.counts) {
+            throw new Error(d?.error ?? `The server answered ${response.status} and sent no dashboard.`);
+          }
+        } catch (error) {
+          $('dash').innerHTML =
+            `<h2>The dashboard could not be read</h2><pre class="prose">${escapeHtml(error.message)}</pre>`;
+          return;
+        }
+        $('status-line').textContent = `${d.counts.total} record(s) · read ${new Date().toLocaleTimeString()}`;
+        lastDashboard = d;
+        drawDashboard(d);
+      }
+
+      function drawDashboard(d) {
+        hideTip();
+        $('dash').innerHTML =
+          `<h2>The store as a whole</h2>` +
+          headlinePart(d) +
+          planPart(d) +
+          workPart(d) +
+          requirementsPart(d) +
+          countsPart(d) +
+          splitsPart(d);
+      }
+
+      /**
+       * Switching one chart to its table, or back, redraws the dashboard from the figures it last
+       * fetched. The dashboard's own scroll position is kept, so the chart that was switched stays
+       * where the reader was looking.
+       */
+      $('dash').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-view-switch]');
+        if (!button || !lastDashboard) return;
+        const chart = button.dataset.viewSwitch;
+        if (asTable.has(chart)) asTable.delete(chart);
+        else asTable.add(chart);
+        const scroll = $('dash').scrollTop;
+        drawDashboard(lastDashboard);
+        $('dash').scrollTop = scroll;
+      });
+
+      /**
+       * One tooltip serves every mark on the dashboard. It shows what the mark's data-tip
+       * attribute holds, value first and label after, beside the pointer, or below the mark when
+       * the mark was reached with the keyboard.
+       */
+      function showTip(target, x, y) {
+        const { title, rows } = JSON.parse(target.dataset.tip);
+        const tip = $('tip');
+        tip.replaceChildren();
+        const head = document.createElement('div');
+        head.className = 't-title';
+        head.textContent = title;
+        tip.append(head);
+        for (const row of rows) {
+          const line = document.createElement('div');
+          line.className = 't-row';
+          if (row.c) {
+            const key = document.createElement('span');
+            key.className = 't-key';
+            key.style.background = row.c;
+            line.append(key);
+          }
+          const value = document.createElement('span');
+          value.className = 't-v';
+          value.textContent = row.v;
+          const name = document.createElement('span');
+          name.className = 't-l';
+          name.textContent = row.l;
+          line.append(value, name);
+          tip.append(line);
+        }
+        tip.hidden = false;
+        const box = tip.getBoundingClientRect();
+        const left = Math.min(x + 14, window.innerWidth - box.width - 8);
+        const top = y + 14 + box.height > window.innerHeight ? y - box.height - 10 : y + 14;
+        tip.style.left = `${Math.max(8, left)}px`;
+        tip.style.top = `${Math.max(8, top)}px`;
+      }
+
+      function hideTip() {
+        $('tip').hidden = true;
+      }
+
+      $('dash').addEventListener('pointermove', (event) => {
+        const target = event.target.closest('[data-tip]');
+        if (target) showTip(target, event.clientX, event.clientY);
+        else hideTip();
+      });
+      $('dash').addEventListener('pointerleave', hideTip);
+
+      function showTipBelow(target) {
+        const rect = target.getBoundingClientRect();
+        showTip(target, rect.left, rect.bottom - 6);
+      }
+
+      /**
+       * A mark reached with the keyboard is scrolled into view, and that scroll arrives after the
+       * focus event. Hiding the tooltip on every scroll would therefore hide it as soon as it was
+       * shown, so while a mark has focus the tooltip follows the mark instead.
+       */
+      $('dash').addEventListener('scroll', () => {
+        const focused = document.activeElement?.closest?.('#dash [data-tip]');
+        if (focused) showTipBelow(focused);
+        else hideTip();
+      });
+      $('dash').addEventListener('focusin', (event) => {
+        const target = event.target.closest('[data-tip]');
+        if (target) showTipBelow(target);
+      });
+      $('dash').addEventListener('focusout', hideTip);
+
+      let activeTab = 'records';
+
+      function showTab(tab) {
+        activeTab = tab;
+        for (const button of document.querySelectorAll('#tabs button')) {
+          button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+        }
+        for (const element of document.querySelectorAll('.records-only')) element.hidden = tab !== 'records';
+        document.querySelector('main').hidden = tab !== 'records';
+        $('dash').hidden = tab !== 'dashboard';
+      }
+
+      /**
+       * The address decides what the page shows. #dashboard opens the Dashboard tab, a record's id
+       * opens that record in the Records tab, and anything else opens the Records tab with nothing
+       * selected. Every link and button on the page changes the address and lets this function do
+       * the rest, so the address bar and the page cannot disagree.
+       */
+      function route() {
+        const hash = location.hash.replace('#', '');
+        if (hash === 'dashboard') {
+          showTab('dashboard');
+          renderDashboard();
+          return;
+        }
+        const wasDashboard = activeTab === 'dashboard';
+        showTab('records');
+        if (wasDashboard) applyFilters();
+        if (hash && STORE.records.some((r) => r.id === hash)) {
+          if (hash !== selectedId) renderRecord(hash);
+        } else {
+          renderHint();
+        }
+      }
+
+      /** Adds one toggle button to a filter group for each value the store holds in that field. */
+      function fillToggles(field, values) {
+        const group = document.querySelector(`.group[data-field="${field}"]`);
+        for (const value of values) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'toggle';
+          button.dataset.value = value;
+          button.setAttribute('aria-pressed', 'false');
+          button.textContent = value;
+          group.append(button);
+        }
+      }
+
+      /**
+       * This is what the reader sees when the store cannot be loaded. Both panes stay empty in that
+       * case. Without this, the page would show a header over nothing and say only 'loading…'.
+       *
+       * The message shown is the server's, and not one invented here. view.js already names the
+       * field and the line in registry.ndjson that it refused, and that is the whole diagnosis. A
+       * page that replaced it with 'something went wrong' would be throwing the diagnosis away.
+       */
+      function renderLoadFailure(detail) {
+        $('status-line').textContent = 'the store could not be read';
+        $('detail').innerHTML =
+          `<h2>The store could not be read</h2>
+           <p class="hint">This page asked <code>/api/store</code> for the store and did not get it. The text below is the server’s own answer.</p>
+           <pre class="prose">${escapeHtml(detail)}</pre>
+           <div class="section-label">Where to look first</div>
+           <p class="hint">Each request reads <code>registry.ndjson</code> with the jtrek source currently on disk, so the message above is what <code>jtrek query</code> would report too. Run <code>jtrek check</code> to see whether the store itself is at fault. A server started before this behaviour was added still reads with the source it started with; stop that one with <code>Ctrl-C</code> and start it again.</p>`;
+      }
+
+      async function load() {
+        let payload;
+        try {
+          const response = await fetch('/api/store');
+          payload = await response.json();
+          // Both halves of the test are needed. A 500 response carries an { error } body rather
+          // than a list of records. A 200 response that somehow carried no list would fail one line
+          // below with a TypeError that nothing catches, and that is the defect this guard exists
+          // for.
+          if (!response.ok || !Array.isArray(payload?.records)) {
+            throw new Error(
+              payload?.error ?? `The server answered ${response.status} and sent no record list.`
+            );
+          }
+        } catch (error) {
+          renderLoadFailure(error.message);
+          return;
+        }
+
+        STORE = payload;
+        for (const record of STORE.records) record._hay = haystack(record);
+
+        const distinct = (field) =>
+          [...new Set(STORE.records.map((r) => r[field]).filter(Boolean))].sort();
+        for (const field of FILTER_FIELDS) fillToggles(field, distinct(field));
+
+        applyFilters();
+        route();
+      }
+
+      $('search').addEventListener('input', applyFilters);
+
+      $('filters').addEventListener('click', (event) => {
+        const toggle = event.target.closest('button.toggle');
+        if (toggle) {
+          const values = chosen[toggle.closest('.group').dataset.field];
+          const on = !values.has(toggle.dataset.value);
+          if (on) values.add(toggle.dataset.value);
+          else values.delete(toggle.dataset.value);
+          toggle.setAttribute('aria-pressed', String(on));
+          applyFilters();
+        }
+        if (event.target.closest('#clear-filters')) {
+          for (const field of FILTER_FIELDS) chosen[field].clear();
+          for (const button of document.querySelectorAll('button.toggle')) {
+            button.setAttribute('aria-pressed', 'false');
+          }
+          applyFilters();
+        }
+      });
+
+      $('list').addEventListener('click', (event) => {
+        const row = event.target.closest('.row');
+        if (row) location.hash = row.dataset.id;
+      });
+
+      document.addEventListener('click', (event) => {
+        const link = event.target.closest('[data-goto]');
+        if (link) location.hash = link.dataset.goto;
+        const tab = event.target.closest('#tabs button');
+        if (tab) location.hash = tab.dataset.tab === 'dashboard' ? 'dashboard' : selectedId ?? '';
+      });
+
+      // Pasting or editing a fragment such as #R-0142 or #dashboard changes the address without
+      // reloading the page, and so does every click above.
+      window.addEventListener('hashchange', route);
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === '/' && activeTab === 'records' && document.activeElement !== $('search')) {
+          event.preventDefault();
+          $('search').focus();
+          $('search').select();
+        }
+        if (event.key === 'Escape') {
+          $('search').blur();
+        }
+        if (activeTab !== 'records') return;
+        if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && matches.length) {
+          event.preventDefault();
+          const at = matches.findIndex((r) => r.id === selectedId);
+          const next = event.key === 'ArrowDown' ? at + 1 : at - 1;
+          const target = matches[Math.max(0, Math.min(matches.length - 1, next))];
+          if (target) {
+            location.hash = target.id;
+            document.querySelector(`.row[data-id="${target.id}"]`)?.scrollIntoView({ block: 'nearest' });
+          }
+        }
+      });
+
+      load();
+    </script>
+  </body>
+</html>

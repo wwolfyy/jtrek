@@ -1,0 +1,1 @@
+⚠️ **Every line of this file is generated — do not edit it.** `jtrek agent install` writes it from jtrek's own `{{SOURCE}}`, and `jtrek agent --check` fails if the two differ. Edits here are lost on the next install; change jtrek's copy instead.

@@ -1,0 +1,30 @@
+{
+  "name": "jtrek",
+  "version": "0.2.0",
+  "description": "A version-controlled, append-only work store with a check-out / check-in loop, for selecting the exact context of a working session.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wwolfyy/jtrek.git"
+  },
+  "type": "module",
+  "bin": {
+    "jtrek": "./bin/jtrek.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "rules",
+    "schema.sql",
+    "MIGRATING.md"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node tests/run.js"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,1 @@
+⚠️ **Every row must have a prose file, and that file must open with what the problem is.** `jtrek checkin` refuses any row whose `detail_ref` is empty. The `note` says what was concluded and is what a stranger reads in a list of search results; the prose file says what that conclusion answers. A note written without it states an answer to a question the reader cannot recover.
