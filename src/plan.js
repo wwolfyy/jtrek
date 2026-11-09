@@ -37,8 +37,14 @@ export const PLAN_FILENAME = 'jtrek_plan.md';
 /** A slug: lowercase letters and digits in groups joined by single hyphens. */
 export const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** A `plan` value in the older numbered form, such as `§5`. */
-export const NUMBERED = /^§\d+$/;
+/**
+ * A `plan` value in the older numbered form, such as `§5`.
+ *
+ * Some plans divided a section with a letter, such as `§7a`, so a number may end in lowercase
+ * letters (`R-000658`). Any other suffix, such as the `-bis` of `§10s-bis`, is not part of a number.
+ * `jtrek migrate --plan-slugs` refuses a value of that kind rather than passing over it (`R-000660`).
+ */
+export const NUMBERED = /^§\d+[a-z]*$/;
 
 /**
  * A section heading in the current form: `## <slug> — <title>`.
@@ -49,8 +55,15 @@ export const NUMBERED = /^§\d+$/;
  */
 const SLUG_HEADING = /^##\s+([a-z0-9]+(?:-[a-z0-9]+)*)\s+—\s+(.+)$/gm;
 
-/** A section heading in the older numbered form: `## §N`, optionally followed by ` — <title>`. */
-const NUMBERED_HEADING = /^##\s+(§\d+)(?:\s+—\s+(.*))?$/gm;
+/**
+ * A section heading in the older numbered form, written in either of two ways.
+ *
+ * The first is `## §N`, optionally followed by ` — <title>`, which is how jtrek wrote it. The second
+ * is `## N. <title>`, with no `§` and a full stop after the number, which is how a plan written by
+ * hand before it adopted jtrek may number its headings (`R-000659`). Its rows still name the section
+ * as `§N`. In both forms, the number may end in lowercase letters, as `NUMBERED` explains.
+ */
+const NUMBERED_HEADING = /^##\s+(?:(§\d+[a-z]*)(?:\s+—\s+(.*))?|(\d+[a-z]*)\.\s+(.*))$/gm;
 
 /**
  * Maps every slug that the plan document has a section for to that section's title and first line.
@@ -215,12 +228,13 @@ export function planFindings(found, planPath) {
  * Returns every heading in the older numbered form, in the order in which they appear.
  *
  * Each entry holds the number, such as `§5`, the title, or null when the heading has none, and the
- * heading line exactly as written, so that the caller can replace that line and nothing else.
+ * heading line exactly as written, so that the caller can replace that line and nothing else. A
+ * heading written as `## 5. <title>` is given the number `§5`, because that is what its rows name.
  */
 export function numberedSections(text) {
   return [...text.matchAll(NUMBERED_HEADING)].map((heading) => ({
-    marker: heading[1],
-    title: heading[2]?.trim() || null,
+    marker: heading[1] ?? `§${heading[3]}`,
+    title: (heading[2] ?? heading[4])?.trim() || null,
     line: heading[0],
     index: heading.index,
   }));

@@ -59,8 +59,9 @@
  * later one. Stores written before that decision name numbers in their `plan` values and in their
  * plan document's headings. This mode rewrites both, and `R-000183` records how it was designed.
  *
- * It takes each slug from the plan document. For every heading of the form `## §N — <title>`, the
- * slug is derived from the title by `deriveSlug`, unless a `--slug §N=<slug>` argument names it
+ * It takes each slug from the plan document. For every heading of the form `## §N — <title>` or
+ * `## N. <title>`, the slug is derived from the title by `deriveSlug`, unless a `--slug §N=<slug>`
+ * argument names it
  * instead. The derived slug of a long title is long, and the override is how a project chooses a
  * short one. The mode then rewrites the `plan` value of every row naming a number, including rows
  * that are earlier revisions, so that `jtrek history` and `jtrek query` agree with each other.
@@ -75,8 +76,9 @@
  * It runs only against a store at the current format version, and it refuses a registry or a plan
  * document with uncommitted changes, because it replaces both files. It stops without writing
  * anything when a row names a number the plan has no heading for, rather than guessing which
- * section was meant. It also stops when two sections would share a slug, or when a title yields no
- * slug and no override supplies one. Like the rebuild, it rewrites every line of the registry, so
+ * section was meant. It also stops when a row names a value that begins with `§` but is not a
+ * number, when two sections would share a slug, or when a title yields no slug and no override
+ * supplies one. A number is `§` followed by digits, which may end in lowercase letters, as `§7a`. Like the rebuild, it rewrites every line of the registry, so
  * the `history` check fails until the result is committed.
  *
  * `jtrek migrate --from-jtrack` is a third transformation, and `src/commands/migrate-from-jtrack.js`
@@ -123,11 +125,12 @@ that new store before writing anything, and then replaces the registry.
 It refuses a store that is already current, a store written by a newer jtrek, and a registry
 carrying uncommitted changes.
 
-With --plan-slugs, it renames the plan's sections from numbers such as §5 to slugs such as
-plan-surface. Each slug is derived from the section's title unless --slug names it. It rewrites
-every row's 'plan' value and every numbered heading in the plan document, and it writes nothing if
-a row names a number the plan has no heading for. It refuses a store not at the current format
-version, and a registry or plan document carrying uncommitted changes.
+With --plan-slugs, it renames the plan's sections from numbers such as §5 or §7a to slugs such as
+plan-surface. It reads a numbered heading written as '## §5 — <title>' or as '## 5. <title>'. Each
+slug is derived from the section's title unless --slug names it. It rewrites every row's 'plan'
+value and every numbered heading in the plan document. It writes nothing if a row names a number
+the plan has no heading for, or a value that begins with § but is not a number. It refuses a store
+not at the current format version, and a registry or plan document carrying uncommitted changes.
 
 With --from-jtrack, it brings a project that adopted jtrack under jtrek's names. It moves jtrack/,
 jtrack.json and the jtrack_*.md documents to their jtrek names with git mv, rewrites the registry's
@@ -531,6 +534,25 @@ function renamePlanSections(store, overrides) {
   const mapping = slugMapping(planText, overrides);
 
   const { records } = loadRegistry({ registryPath: store.registryPath });
+  // A value that begins with § but is not a number this command recognises would otherwise be left
+  // as it is while the run reported success, and every row naming it would then name no section
+  // (`R-000660`). The run therefore stops and names each such value, so that a person can decide
+  // which section was meant.
+  const unrecognised = new Map();
+  for (const record of records) {
+    const plan = record.plan ?? '';
+    if (!plan.startsWith('§') || NUMBERED.test(plan)) continue;
+    unrecognised.set(plan, [...new Set([...(unrecognised.get(plan) ?? []), record.id])]);
+  }
+  if (unrecognised.size > 0) {
+    throw new Error(
+      `Some rows name a plan value that begins with § but is not a section number this command ` +
+        `recognises, which is § followed by digits and optionally by lowercase letters. Nothing was ` +
+        `written. Correct the records, then run this again:\n  - ` +
+        [...unrecognised].map(([value, ids]) => `${value}: ${ids.join(', ')}`).join('\n  - ')
+    );
+  }
+
   const numberedRows = records.filter((record) => NUMBERED.test(record.plan ?? ''));
   const unmapped = new Map();
   for (const record of numberedRows) {

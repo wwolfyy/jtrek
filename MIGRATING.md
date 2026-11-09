@@ -70,7 +70,7 @@ Older stores name plan sections by number, such as `§5`. Find out whether this 
 jtrek query --query "plan LIKE '§%'"
 ```
 
-If that lists any row, rename them. The slug of each section comes from its title unless `--slug §N=<slug>` names it, and the command writes nothing if a row names a number that the plan has no heading for.
+If that lists any row, rename them. The command reads a numbered heading written either as `## §5 — Title` or as `## 5. Title`, and a number may end in lowercase letters, as `§7a` does. The slug of each section comes from its title unless `--slug §N=<slug>` names it. The command writes nothing if a row names a number that the plan has no heading for, or a value that begins with `§` but is not a number, such as `§10s-bis`. It names each such value, and the records naming it need a revision before the command is run again.
 
 ```bash
 jtrek migrate --plan-slugs
