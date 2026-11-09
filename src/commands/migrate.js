@@ -155,8 +155,13 @@ export function parseArgs(argv) {
         args.planSlugs = true;
         break;
       case '--slug': {
-        const match = value?.match(/^(§\d+)=(.+)$/);
-        if (!match) throw new UsageError('--slug needs a section and a slug, e.g. --slug §5=plan-surface');
+        // The section number is tested with the same pattern that recognises a number in a row
+        // and in a heading, so that a lettered section such as §7a can be given a slug here too.
+        // A pattern of its own once accepted only digits, and refused every lettered section.
+        const match = value?.match(/^([^=]+)=(.+)$/);
+        if (!match || !NUMBERED.test(match[1])) {
+          throw new UsageError('--slug needs a section and a slug, e.g. --slug §5=plan-surface');
+        }
         if (!SLUG.test(match[2])) {
           throw new UsageError(
             `'${match[2]}' is not a slug. A slug is lowercase letters and digits in groups joined ` +
